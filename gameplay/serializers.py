@@ -1,5 +1,6 @@
 from rest_framework import serializers
 from .models import GameSession, Answer
+from gameplay.ai_engine.schemas import INCIDENT_TYPES
 
 
 class AnswerSerializer(serializers.ModelSerializer):
@@ -8,8 +9,7 @@ class AnswerSerializer(serializers.ModelSerializer):
         fields = [
             "id",
             "session",
-            "stage",
-            "question_id",
+            "question_run",
             "selected_text",
             "score_delta",
             "is_correct",
@@ -38,3 +38,17 @@ class GameSessionSerializer(serializers.ModelSerializer):
             "advice_summary",
         ]
         read_only_fields = ["id", "user", "started_at", "last_activity_at"]
+
+
+# -----------------------------
+# AI serializers
+# -----------------------------
+class StartSessionSerializer(serializers.Serializer):
+    difficulty = serializers.IntegerField(min_value=1, max_value=5)
+    incident_type = serializers.ChoiceField(choices=INCIDENT_TYPES)
+
+
+class GenerateStageSerializer(serializers.Serializer):
+    stage_name = serializers.ChoiceField(
+        choices=["prepare", "detect", "analyse", "remediate", "post_incident"]
+    )
