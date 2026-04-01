@@ -12,7 +12,10 @@ from typing import Dict, List
 
 from gameplay.models import Playbook, Question
 
+import json
+import requests
 
+from .models import Answer
 
 class SessionService:
     def __init__(self, provider: BaseScenarioProvider):
@@ -367,3 +370,213 @@ def start_static_session(user, difficulty: str, topic: str, questions_per_stage:
             )
 
     return session
+    
+
+def generate_ai_training_feedback(session):
+    wrong_answers = Answer.objects.filter(
+        session=session,
+        is_correct=False
+    ).select_related("question_run")
+
+    # Default abandoned fallback
+    if session.status == "abandoned" and not wrong_answers.exists():
+        return (
+            "Session abandoned before completion.\n\n"
+            "General Debrief:\n"
+            "- The scenario was not completed, so full performance could not be assessed.\n"
+            "- The user should review core incident response steps for this topic.\n"
+            "- Recommended focus areas include verification, escalation, and correct response procedures.\n"
+            "- Best next step: retry the scenario and complete all stages for a full debrief."
+        )
+
+    summary_data = []
+
+    for ans in wrong_answers:
+        q = ans.question_run
+        correct = None
+
+        for opt in q.choices:
+            if opt.get("delta_score", 0) > 0:
+                correct = opt.get("text")
+                break
+
+        summary_data.append({
+            "question": q.prompt,
+            "wrong_answer": ans.selected_text,
+            "correct_answer": correct
+        })
+
+    # If no wrong answers at all
+    if not summary_data:
+        if session.status == "abandoned":
+            return (
+                "Session abandoned before completion.\n\n"
+                "General Debrief:\n"
+                "- No incorrect answers were recorded before the session ended.\n"
+                "- However, the scenario was not completed, so overall readiness cannot be fully assessed.\n"
+                "- Best next step: complete the full scenario to receive a more accurate debrief."
+            )
+
+        return (
+            "General Debrief:\n"
+            "- Performance was strong overall.\n"
+            "- No incorrect answers were recorded.\n"
+            "- Recommended next step: continue with harder scenarios to test advanced incident response skills."
+        )
+
+    prompt = f"""
+You are a cybersecurity training instructor.
+
+Generate a generalised debrief for a tabletop training session.
+
+Session status: {session.status}
+Topic: {session.topic}
+Total score: {session.total_score}
+Wrong count: {session.wrong_count}
+
+The debrief must:
+- be concise
+- be generalised, not overly detailed
+- include overall performance
+- include key weakness areas
+- include recommended next steps
+- if the session was abandoned, mention that it was incomplete
+
+Return plain text with short bullet points.
+
+Incorrect answers:
+{json.dumps(summary_data, indent=2)}
+"""
+
+    try:
+        response = requests.post(
+            "http://localhost:11434/api/generate",
+            json={
+                "model": "llama3:latest",
+                "prompt": prompt,
+                "stream": False
+            },
+            timeout=60
+        )
+
+        response.raise_for_status()
+        data = response.json()
+        return data.get("response", "").strip()
+
+    except Exception:
+        lines = []
+
+        if session.status == "abandoned":
+            lines.append("General Debrief:")
+            lines.append("- Session was abandoned before completion.")
+        else:
+            lines.append("General Debrief:")
+            lines.append("- Session reached an end state.")
+
+        lines.append(f"- Topic: {session.topic}")
+        lines.append(f"- Total score: {session.total_score}")
+        lines.append(f"- Incorrect answers recorded: {session.wrong_count}")
+
+        if session.wrong_count > 0:
+            lines.append("- Main improvement area: incident recognition and response decision-making.")
+            lines.append("- Recommended next step: review incorrect decisions and retry the scenario.")
+        else:
+            lines.append("- Performance was generally positive.")
+            lines.append("- Recommended next step: move to a harder difficulty.")
+
+        return "\n".join(lines)
+    
+    import json
+    import requests
+
+
+def generate_ai_inject_question(topic: str, severity: str):
+    prompt = f"""
+You are generating a cybersecurity scenario injection question.
+
+Incident type: {topic}
+Severity: {severity}
+
+Return ONLY valid JSON.
+Do not include markdown fences.
+Do not include explanations.
+
+Format:
+{{
+  "question": "short scenario question",
+  "options": [
+    {{
+      "id": "A",
+      "text": "good response",
+      "delta_score": 10
+    }},
+    {{
+      "id": "B",
+      "text": "bad response",
+      "delta_score": -10
+    }}
+  ]
+}}
+
+Rules:
+- The injection must be phrased as a question.
+- There must be exactly 2 answers.
+- Answer A must be the good answer with delta_score 10.
+- Answer B must be the bad answer with delta_score -10.
+- Keep it realistic and concise.
+- Keep the question under 25 words.
+- Match the incident type and severity.
+""".strip()
+
+    try:
+        response = requests.post(
+            "http://localhost:11434/api/generate",
+            json={
+                "model": "llama3:latest",
+                "prompt": prompt,
+                "stream": False,
+            },
+            timeout=60,
+        )
+        response.raise_for_status()
+
+        data = response.json()
+        raw = data.get("response", "").strip()
+
+        if raw.startswith("```json"):
+            raw = raw[len("```json"):].strip()
+        if raw.startswith("```"):
+            raw = raw[len("```"):].strip()
+        if raw.endswith("```"):
+            raw = raw[:-3].strip()
+
+        parsed = json.loads(raw)
+
+        if (
+            isinstance(parsed, dict)
+            and "question" in parsed
+            and "options" in parsed
+            and isinstance(parsed["options"], list)
+            and len(parsed["options"]) == 2
+        ):
+            return parsed
+
+    except Exception as e:
+        print(f"[AI inject fallback triggered] {e}")
+
+    # fallback
+    return {
+        "question": f"A {severity} {topic} escalation is developing. What should the team do next?",
+        "options": [
+            {
+                "id": "A",
+                "text": "Investigate and respond immediately",
+                "delta_score": 10,
+            },
+            {
+                "id": "B",
+                "text": "Delay action and hope it resolves itself",
+                "delta_score": -10,
+            },
+        ],
+    }

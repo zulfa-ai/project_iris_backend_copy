@@ -24,6 +24,8 @@ from .services import start_ai_session, generate_ai_stage, generate_ai_debrief
 from rest_framework.decorators import api_view
 from gameplay.services import start_static_session
 
+from .services import generate_ai_training_feedback
+from .services import generate_ai_training_feedback, generate_ai_inject_question
 
 @api_view(["POST"])
 @permission_classes([IsAuthenticated])
@@ -284,6 +286,23 @@ def submit_answer(request, session_id: int):
         if not is_correct:
             session.wrong_count += 1
 
+        # Severity logic
+        severity = "low"
+        if session.wrong_count >= 4:
+            severity = "critical"
+        elif session.wrong_count >= 3:
+            severity = "high"
+        elif session.wrong_count >= 2:
+            severity = "elevated"
+
+        # Generate AI inject question only if answer is wrong
+        ai_inject = None
+        if not is_correct:
+            ai_inject = generate_ai_inject_question(
+                topic=session.topic,
+                severity=severity,
+            )
+
         # Advance stage if no pending questions left
         if not stage_run.questions.filter(status="pending").exists():
             stage_run.status = "done"
@@ -317,6 +336,8 @@ def submit_answer(request, session_id: int):
         {
             "answer": AnswerSerializer(ans).data,
             "session": GameSessionSerializer(session).data,
+            "severity": severity,
+            "ai_inject": ai_inject,
         },
         status=201,
     )
@@ -324,19 +345,23 @@ def submit_answer(request, session_id: int):
 
 @api_view(["POST"])
 @permission_classes([IsAuthenticated])
-def quit_session(request, session_id: int):
+def quit_session(request, session_id):
     session = GameSession.objects.filter(id=session_id, user=request.user).first()
+
     if not session:
-        return Response({"detail": "session not found"}, status=status.HTTP_404_NOT_FOUND)
+        return Response({"detail": "session not found"}, status=404)
 
     if session.status == "in_progress":
         session.status = "abandoned"
         session.ended_reason = "user_quit"
         session.ended_at = timezone.now()
-        session.save(update_fields=["status", "ended_reason", "ended_at"])
+        session.advice_summary = generate_ai_training_feedback(session)
+        session.save(update_fields=["status", "ended_reason", "ended_at", "advice_summary"])
 
-    return Response({"session": GameSessionSerializer(session).data})
-
+    return Response({
+        "session": GameSessionSerializer(session).data,
+        "training_feedback": session.advice_summary,
+    })
 
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
