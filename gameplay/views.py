@@ -27,6 +27,12 @@ from gameplay.services import start_static_session
 from .services import generate_ai_training_feedback
 from .services import generate_ai_training_feedback, generate_ai_inject_question
 
+from django.db.models import Max
+from rest_framework.decorators import api_view, permission_classes
+from rest_framework.permissions import IsAuthenticated
+from rest_framework.response import Response
+from gameplay.models import GameSession
+
 @api_view(["POST"])
 @permission_classes([IsAuthenticated])
 def session_start(request):
@@ -699,3 +705,24 @@ class AIAnswerSubmitView(APIView):
             },
             status=201,
         )
+    
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def leaderboard_view(request):
+    leaderboard_data = (
+        GameSession.objects
+        .filter(user__isnull=False)
+        .values("user__username")
+        .annotate(points=Max("total_score"))
+        .order_by("-points")[:3]
+    )
+
+    results = []
+    for i, row in enumerate(leaderboard_data, start=1):
+        results.append({
+            "rank": i,
+            "name": row["user__username"],
+            "points": row["points"]
+        })
+
+    return Response(results)

@@ -17,4 +17,9 @@ urlpatterns = [
     # JWT
     path("api/token/", TokenObtainPairView.as_view()),
     path("api/token/refresh/", TokenRefreshView.as_view()),
+
+    path("admin/", admin.site.urls),
+
+    path("api/gameplay/", include("gameplay.urls")),
+    path("api/", include("scenarios.urls")),
 ]

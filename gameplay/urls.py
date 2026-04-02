@@ -1,5 +1,7 @@
 from django.urls import path
 from gameplay import views
+from django.urls import path
+from .views import leaderboard_view
 
 urlpatterns = [
     path("health/", views.health, name="health"),
@@ -19,4 +21,5 @@ urlpatterns = [
     path("ai/session/<int:session_id>/debrief/", views.AIDebriefGenerateView.as_view(), name="ai_debrief"),
     path("ai/session/<int:session_id>/current/", views.AICurrentQuestionView.as_view(), name="ai_current"),
     path("ai/session/<int:session_id>/answer/", views.AIAnswerSubmitView.as_view(), name="ai_answer"),
+    path("leaderboard/", leaderboard_view, name="leaderboard"),
 ]
